@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 - Parallel startup failure handling is fail-fast: stop scheduling new work, wait for in-flight jobs, then report failure.
 - GitHub Actions Arduino CLI job now enables `library.enable_unsafe_install` before `--git-url` dependency installs.
+- GitHub Actions CI now mirrors standard ESPToolKit settings (push on `main`/`master` and `v*` tags, cached Arduino deps, ESP32 board manager URL, pinned ESP32 core).
 
 ## [1.0.0] - 2026-03-05
 ### Added
