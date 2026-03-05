@@ -1,5 +1,9 @@
 # ESPStartup
 
+> [!WARNING]
+> ## DEPRECATED
+> **ESPStartup is deprecated in favor of [ESPLifeCycle](https://github.com/ESPToolKit/esp-lifecycle).**
+
 ESPStartup is a startup orchestration library for ESP32 applications built with ESPToolKit. It lets you split boot logic into ordered sections, validate step dependencies, and move deferred initialization to `ESPWorker`.
 
 ## CI / Release / License
