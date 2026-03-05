@@ -10,6 +10,7 @@ ESPStartup is a startup orchestration library for ESP32 applications built with 
 ## Features
 - Section-based startup flow (`core`, `network`, `datetime`, or custom).
 - Dependency ordering via `.after("step")` with validation.
+- Optional parallel init inside a section for independent or explicitly safe steps.
 - Blocking first section, deferred sections run in `ESPWorker`.
 - Readiness gates for deferred sections.
 - Snapshot and JSON export helpers for diagnostics.
@@ -43,13 +44,15 @@ void setup() {
 
     ESPStartupConfig cfg{};
     cfg.worker = &worker;
+    cfg.enableParallelInit = true;
     cfg.onReady = []() { Serial.println("startup ready"); };
     cfg.onFailed = []() { Serial.println("startup failed"); };
 
     startup.configure(cfg);
     startup.init({"core", "network"});
 
-    startup.addTo("core", "logger", []() { return true; });
+    startup.addTo("core", "logger", []() { return true; }).parallelSafe();
+    startup.addTo("core", "storage", []() { return true; }); // no deps => auto parallel eligible
     startup.addTo("network", "wifi", []() { return true; }).after("logger");
 
     startup.start();
@@ -67,12 +70,19 @@ startup.section("network").readiness(
 
 If no wait callback is supplied, ESPStartup uses `vTaskDelay(waitTicks)`.
 
+## Parallel Init Rules
+- Parallelism is section-scoped only.
+- A step is parallel-eligible if it has no dependencies, or it is marked with `.parallelSafe(true)`.
+- If parallel init is enabled and a wave has 2+ eligible steps, `ESPStartupConfig::worker` is required.
+- On failure, ESPStartup stops scheduling new steps, waits for already-started parallel steps, then returns failure.
+
 ## API Summary
 - `bool configure(const ESPStartupConfig& config)`
 - `bool init(std::initializer_list<const char*> sectionNames = {})`
 - `SectionHandle section(const char* sectionName)`
 - `StepHandle addTo(const char* sectionName, const char* stepName, const StepCallback& callback)`
 - `StepHandle add(const char* stepName, const StepCallback& callback)`
+- `StepHandle::parallelSafe(bool enabled = true)`
 - `bool start()`
 - `void stop()`
 - `StartupStatusSnapshot snapshot() const`
@@ -83,6 +93,7 @@ If no wait callback is supplied, ESPStartup uses `vTaskDelay(waitTicks)`.
 - `TickType_t waitTicks`
 - `const char* workerName`
 - `size_t workerStackSizeBytes`
+- `bool enableParallelInit`
 - `std::function<void()> onStarted`
 - `std::function<void()> onReady`
 - `std::function<void()> onFailed`
@@ -98,6 +109,7 @@ If no wait callback is supplied, ESPStartup uses `vTaskDelay(waitTicks)`.
 ## Examples
 - `examples/Basic` - basic multi-section startup flow.
 - `examples/SectionReadiness` - delayed section execution with readiness checks.
+- `examples/ParallelInit` - parallel init of independent and safe steps.
 
 ## License
 MIT - see [LICENSE.md](LICENSE.md).

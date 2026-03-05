@@ -75,11 +75,11 @@ bool ESPStartup::validateAndResolve(std::string& outErrorMessage) {
         }
     }
 
-    sectionOrder.clear();
-    sectionOrder.resize(sections.size());
+    sectionBatches.clear();
+    sectionBatches.resize(sections.size());
 
     for( size_t sectionIndex = 0; sectionIndex < sections.size(); sectionIndex++ ){
-        if( !buildSectionOrder(sectionIndex, sectionOrder[sectionIndex], outErrorMessage) ){
+        if( !buildSectionBatches(sectionIndex, sectionBatches[sectionIndex], outErrorMessage) ){
             return false;
         }
     }
@@ -87,9 +87,9 @@ bool ESPStartup::validateAndResolve(std::string& outErrorMessage) {
     return true;
 }
 
-bool ESPStartup::buildSectionOrder(
+bool ESPStartup::buildSectionBatches(
     size_t sectionIndex,
-    std::vector<size_t>& outOrder,
+    std::vector<std::vector<size_t>>& outBatches,
     std::string& outErrorMessage
 ) const {
     std::vector<size_t> sectionSteps;
@@ -130,24 +130,37 @@ bool ESPStartup::buildSectionOrder(
         }
     }
 
-    outOrder.clear();
-    outOrder.reserve(sectionSteps.size());
+    outBatches.clear();
+    outBatches.reserve(sectionSteps.size());
 
     size_t readyCursor = 0;
     while( readyCursor < ready.size() ){
-        const size_t currentSectionStepIndex = ready[readyCursor++];
-        outOrder.push_back(sectionSteps[currentSectionStepIndex]);
+        const size_t waveEnd = ready.size();
+        std::vector<size_t> batch;
+        batch.reserve(waveEnd - readyCursor);
 
-        for( size_t edgeIndex = 0; edgeIndex < edges[currentSectionStepIndex].size(); edgeIndex++ ){
-            const size_t nextSectionStepIndex = edges[currentSectionStepIndex][edgeIndex];
-            indegree[nextSectionStepIndex]--;
-            if( indegree[nextSectionStepIndex] == 0 ){
-                ready.push_back(nextSectionStepIndex);
+        while( readyCursor < waveEnd ){
+            const size_t currentSectionStepIndex = ready[readyCursor++];
+            batch.push_back(sectionSteps[currentSectionStepIndex]);
+
+            for( size_t edgeIndex = 0; edgeIndex < edges[currentSectionStepIndex].size(); edgeIndex++ ){
+                const size_t nextSectionStepIndex = edges[currentSectionStepIndex][edgeIndex];
+                indegree[nextSectionStepIndex]--;
+                if( indegree[nextSectionStepIndex] == 0 ){
+                    ready.push_back(nextSectionStepIndex);
+                }
             }
         }
+
+        outBatches.push_back(batch);
     }
 
-    if( outOrder.size() != sectionSteps.size() ){
+    size_t resolvedSteps = 0;
+    for( size_t batchIndex = 0; batchIndex < outBatches.size(); batchIndex++ ){
+        resolvedSteps += outBatches[batchIndex].size();
+    }
+
+    if( resolvedSteps != sectionSteps.size() ){
         outErrorMessage = "startup dependency cycle in section: " + sections[sectionIndex].name;
         return false;
     }

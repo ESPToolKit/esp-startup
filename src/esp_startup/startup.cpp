@@ -12,6 +12,13 @@ ESPStartup::StepHandle& ESPStartup::StepHandle::after(const char* dependencyStep
     return *this;
 }
 
+ESPStartup::StepHandle& ESPStartup::StepHandle::parallelSafe(bool enabled) {
+    if( startup != nullptr ){
+        startup->setStepParallelSafe(stepIndex, enabled);
+    }
+    return *this;
+}
+
 ESPStartup::SectionHandle::SectionHandle(ESPStartup* startupReference, size_t sectionIndexValue)
     : startup(startupReference), sectionIndex(sectionIndexValue) {}
 
@@ -35,7 +42,7 @@ void ESPStartup::clear() {
 
     sections.clear();
     steps.clear();
-    sectionOrder.clear();
+    sectionBatches.clear();
     sectionCompleted.clear();
 
     {
@@ -52,7 +59,7 @@ bool ESPStartup::init(std::initializer_list<const char*> sectionNames) {
     }
 
     sections.clear();
-    sectionOrder.clear();
+    sectionBatches.clear();
     sectionCompleted.clear();
 
     for( const char* sectionName : sectionNames ){
@@ -236,4 +243,12 @@ void ESPStartup::addDependency(size_t stepIndex, const char* dependencyStepName)
     }
 
     steps[stepIndex].dependencies.emplace_back(dependencyStepName);
+}
+
+void ESPStartup::setStepParallelSafe(size_t stepIndex, bool enabled) {
+    if( stepIndex >= steps.size() ){
+        return;
+    }
+
+    steps[stepIndex].parallelSafe = enabled;
 }

@@ -3,6 +3,7 @@
 #include <Arduino.h>
 
 #include <freertos/task.h>
+#include <utility>
 
 void ESPStartup::loop() {
     for( size_t sectionIndex = 1; sectionIndex < sections.size(); sectionIndex++ ){
@@ -65,7 +66,7 @@ bool ESPStartup::waitForSection(size_t sectionIndex) {
 }
 
 bool ESPStartup::runSection(size_t sectionIndex, bool deferredFailure) {
-    if( sectionIndex >= sectionOrder.size() ){
+    if( sectionIndex >= sectionBatches.size() ){
         setFailure("startup_invalid", "section index out of bounds", nullptr);
         if( config.onFailed ){
             config.onFailed();
@@ -74,18 +75,209 @@ bool ESPStartup::runSection(size_t sectionIndex, bool deferredFailure) {
         return false;
     }
 
-    const std::vector<size_t>& order = sectionOrder[sectionIndex];
-    for( size_t index = 0; index < order.size(); index++ ){
+    const std::vector<std::vector<size_t>>& batches = sectionBatches[sectionIndex];
+    for( size_t batchIndex = 0; batchIndex < batches.size(); batchIndex++ ){
         if( !running.load() ){
             return false;
         }
 
-        if( !runStep(order[index], deferredFailure) ){
-            return false;
+        const std::vector<size_t>& batch = batches[batchIndex];
+        if( !config.enableParallelInit ){
+            for( size_t index = 0; index < batch.size(); index++ ){
+                if( !running.load() ){
+                    return false;
+                }
+                if( !runStep(batch[index], deferredFailure) ){
+                    return false;
+                }
+            }
+            continue;
+        }
+
+        std::vector<size_t> parallelEligible;
+        std::vector<size_t> sequentialOnly;
+        parallelEligible.reserve(batch.size());
+        sequentialOnly.reserve(batch.size());
+
+        for( size_t index = 0; index < batch.size(); index++ ){
+            const size_t stepIndex = batch[index];
+            if( stepIndex >= steps.size() ){
+                setFailure("startup_invalid", "step index out of bounds", nullptr);
+                if( config.onFailed ){
+                    config.onFailed();
+                }
+                running.store(false);
+                return false;
+            }
+
+            const StepDefinition& step = steps[stepIndex];
+            if( step.dependencies.empty() || step.parallelSafe ){
+                parallelEligible.push_back(stepIndex);
+            } else {
+                sequentialOnly.push_back(stepIndex);
+            }
+        }
+
+        if( parallelEligible.size() >= 2 ){
+            if( config.worker == nullptr ){
+                setFailure("startup_invalid", "parallel init requires worker", nullptr);
+                if( config.onFailed ){
+                    config.onFailed();
+                }
+                running.store(false);
+                return false;
+            }
+
+            if( !runParallelBatch(parallelEligible, deferredFailure) ){
+                return false;
+            }
+        } else if( parallelEligible.size() == 1 ){
+            if( !runStep(parallelEligible[0], deferredFailure) ){
+                return false;
+            }
+        }
+
+        for( size_t index = 0; index < sequentialOnly.size(); index++ ){
+            if( !running.load() ){
+                return false;
+            }
+
+            if( !runStep(sequentialOnly[index], deferredFailure) ){
+                return false;
+            }
         }
     }
 
     return true;
+}
+
+bool ESPStartup::runParallelBatch(const std::vector<size_t>& batch, bool deferredFailure) {
+    if( batch.empty() ){
+        return true;
+    }
+
+    if( config.worker == nullptr ){
+        setFailure("startup_invalid", "parallel init requires worker", nullptr);
+        if( config.onFailed ){
+            config.onFailed();
+        }
+        running.store(false);
+        return false;
+    }
+
+    setStatus(StartupStatusKind::Running);
+
+    std::atomic<bool> failureTriggered = false;
+    std::mutex resultMutex;
+    std::vector<std::pair<size_t, bool>> results;
+    results.reserve(batch.size());
+    std::vector<std::shared_ptr<WorkerHandler>> handlers;
+    handlers.reserve(batch.size());
+
+    const char* failureCode = deferredFailure ? "deferred_init_failed" : "core_init_failed";
+
+    auto triggerFailure = [&](const char* code, const char* message, const char* stepName) {
+        bool expected = false;
+        if( !failureTriggered.compare_exchange_strong(expected, true) ){
+            return;
+        }
+
+        setFailure(code, message, stepName);
+        if( config.onFailed ){
+            config.onFailed();
+        }
+        if( deferredFailure && config.onDeferredFailure ){
+            config.onDeferredFailure();
+        }
+
+        running.store(false);
+    };
+
+    for( size_t index = 0; index < batch.size(); index++ ){
+        if( !running.load() || failureTriggered.load() ){
+            break;
+        }
+
+        const size_t stepIndex = batch[index];
+        if( stepIndex >= steps.size() ){
+            triggerFailure("startup_invalid", "step index out of bounds", nullptr);
+            break;
+        }
+
+        WorkerConfig workerConfig;
+        workerConfig.stackSizeBytes = config.workerStackSizeBytes;
+        if( config.workerName != nullptr ){
+            workerConfig.name = std::string(config.workerName) + "-parallel";
+        } else {
+            workerConfig.name = "startup-parallel";
+        }
+
+        WorkerResult workerResult = config.worker->spawnExt(
+            [this, stepIndex, &resultMutex, &results, &triggerFailure, failureCode]() {
+                bool stepOk = false;
+                if( stepIndex < steps.size() && steps[stepIndex].callback ){
+                    stepOk = steps[stepIndex].callback();
+                }
+
+                {
+                    std::lock_guard<std::mutex> lock(resultMutex);
+                    results.push_back({stepIndex, stepOk});
+                }
+
+                if( !stepOk ){
+                    const char* stepName = stepIndex < steps.size() ? steps[stepIndex].name.c_str() : nullptr;
+                    triggerFailure(failureCode, "startup step failed", stepName);
+                }
+            },
+            workerConfig
+        );
+
+        if( workerResult.error != WorkerError::None || workerResult.handler == nullptr ){
+            const char* stepName = steps[stepIndex].name.c_str();
+            triggerFailure("startup_start_failed", "failed to start parallel startup step", stepName);
+            break;
+        }
+
+        handlers.push_back(workerResult.handler);
+    }
+
+    for( size_t index = 0; index < handlers.size(); index++ ){
+        std::shared_ptr<WorkerHandler> handler = handlers[index];
+        if( handler == nullptr ){
+            continue;
+        }
+
+        const bool workerStopped = handler->wait(pdMS_TO_TICKS(1000));
+        if( !workerStopped ){
+            handler->destroy();
+            handler->wait(pdMS_TO_TICKS(250));
+        }
+    }
+
+    std::vector<std::pair<size_t, bool>> collected;
+    {
+        std::lock_guard<std::mutex> lock(resultMutex);
+        collected = results;
+    }
+
+    for( size_t index = 0; index < collected.size(); index++ ){
+        if( !collected[index].second ){
+            continue;
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(snapshotMutex);
+            startupSnapshot.completedUnits++;
+            startupSnapshot.updatedAtMs = millis();
+        }
+        publishSnapshot();
+    }
+
+    if( failureTriggered.load() ){
+        return false;
+    }
+
+    return running.load();
 }
 
 bool ESPStartup::runStep(size_t stepIndex, bool deferredFailure) {

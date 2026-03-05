@@ -21,6 +21,7 @@ struct ESPStartupConfig {
     TickType_t waitTicks = pdMS_TO_TICKS(500);
     const char* workerName = "startup-flow";
     size_t workerStackSizeBytes = 6 * 1024;
+    bool enableParallelInit = false;
     std::function<void()> onStarted;
     std::function<void()> onReady;
     std::function<void()> onFailed;
@@ -40,6 +41,7 @@ class ESPStartup {
         StepHandle() = default;
         StepHandle(ESPStartup* startupReference, size_t stepIndexValue);
         StepHandle& after(const char* dependencyStepName);
+        StepHandle& parallelSafe(bool enabled = true);
 
        private:
         ESPStartup* startup = nullptr;
@@ -83,12 +85,13 @@ class ESPStartup {
         size_t sectionIndex = 0;
         StepCallback callback;
         std::vector<std::string> dependencies;
+        bool parallelSafe = false;
     };
 
     ESPStartupConfig config = {};
     std::vector<SectionDefinition> sections = {};
     std::vector<StepDefinition> steps = {};
-    std::vector<std::vector<size_t>> sectionOrder = {};
+    std::vector<std::vector<std::vector<size_t>>> sectionBatches = {};
     std::vector<bool> sectionCompleted = {};
 
     std::atomic<bool> running = false;
@@ -101,19 +104,21 @@ class ESPStartup {
     void setSectionReadiness(size_t sectionIndex, const ReadyCheck& readyCheck, const WaitCallback& waitCallback);
 
     void addDependency(size_t stepIndex, const char* dependencyStepName);
+    void setStepParallelSafe(size_t stepIndex, bool enabled);
     bool dependencyExists(const char* dependencyName) const;
     int sectionRank(size_t sectionIndex) const;
 
     bool validateAndResolve(std::string& outErrorMessage);
-    bool buildSectionOrder(
+    bool buildSectionBatches(
         size_t sectionIndex,
-        std::vector<size_t>& outOrder,
+        std::vector<std::vector<size_t>>& outBatches,
         std::string& outErrorMessage
     ) const;
 
     void loop();
     bool waitForSection(size_t sectionIndex);
     bool runSection(size_t sectionIndex, bool deferredFailure);
+    bool runParallelBatch(const std::vector<size_t>& batch, bool deferredFailure);
     bool runStep(size_t stepIndex, bool deferredFailure);
 
     void publishSnapshot();
