@@ -1,0 +1,42 @@
+{
+  "name": "ESPStartup",
+  "version": "1.0.0",
+  "description": "Startup orchestration for staged ESP32 app initialization.",
+  "keywords": [
+    "esp32",
+    "arduino",
+    "startup",
+    "boot",
+    "orchestration",
+    "init"
+  ],
+  "homepage": "https://github.com/ESPToolKit/esp-startup",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ESPToolKit/esp-startup.git"
+  },
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "zekageri"
+    }
+  ],
+  "frameworks": ["arduino"],
+  "platforms": ["espressif32"],
+  "dependencies": [
+    {
+      "name": "ESPWorker",
+      "version": "https://github.com/ESPToolKit/esp-worker.git"
+    },
+    {
+      "name": "ArduinoJson",
+      "version": ">=7.0.0"
+    }
+  ],
+  "headers": ["ESPStartup.h"],
+  "build": {
+    "flags": [
+      "-std=gnu++17"
+    ]
+  }
+}
